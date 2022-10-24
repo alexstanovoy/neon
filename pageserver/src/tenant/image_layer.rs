@@ -411,7 +411,7 @@ impl ImageLayer {
 ///
 /// 3. Call `finish`.
 ///
-pub struct ImageLayerWriter {
+struct ImageLayerWriterInner {
     conf: &'static PageServerConf,
     path: PathBuf,
     timeline_id: TimelineId,
@@ -423,14 +423,14 @@ pub struct ImageLayerWriter {
     tree: DiskBtreeBuilder<BlockBuf, KEY_SIZE>,
 }
 
-impl ImageLayerWriter {
-    pub fn new(
+impl ImageLayerWriterInner {
+    fn new(
         conf: &'static PageServerConf,
         timeline_id: TimelineId,
         tenant_id: TenantId,
         key_range: &Range<Key>,
         lsn: Lsn,
-    ) -> anyhow::Result<ImageLayerWriter> {
+    ) -> anyhow::Result<Self> {
         // Create the file initially with a temporary filename.
         // We'll atomically rename it to the final name when we're done.
         let path = ImageLayer::temp_path_for(
@@ -455,7 +455,7 @@ impl ImageLayerWriter {
         let block_buf = BlockBuf::new();
         let tree_builder = DiskBtreeBuilder::new(block_buf);
 
-        let writer = ImageLayerWriter {
+        let writer = Self {
             conf,
             path,
             timeline_id,
@@ -474,7 +474,7 @@ impl ImageLayerWriter {
     ///
     /// The page versions must be appended in blknum order.
     ///
-    pub fn put_image(&mut self, key: Key, img: &[u8]) -> Result<()> {
+    fn put_image(&mut self, key: Key, img: &[u8]) -> Result<()> {
         ensure!(self.key_range.contains(&key));
         let off = self.blob_writer.write_blob(img)?;
 
@@ -485,7 +485,7 @@ impl ImageLayerWriter {
         Ok(())
     }
 
-    pub fn finish(self) -> anyhow::Result<ImageLayer> {
+    fn finish(self) -> anyhow::Result<ImageLayer> {
         let index_start_blk =
             ((self.blob_writer.size() + PAGE_SZ as u64 - 1) / PAGE_SZ as u64) as u32;
 
@@ -550,5 +550,39 @@ impl ImageLayerWriter {
         trace!("created image layer {}", layer.path().display());
 
         Ok(layer)
+    }
+}
+
+pub struct ImageLayerWriter {
+    inner: Option<ImageLayerWriterInner>,
+}
+
+impl ImageLayerWriter {
+    pub fn new(
+        conf: &'static PageServerConf,
+        timeline_id: TimelineId,
+        tenant_id: TenantId,
+        key_range: &Range<Key>,
+        lsn: Lsn,
+    ) -> Result<ImageLayerWriter> {
+        Ok(Self {
+            inner: Some(ImageLayerWriterInner::new(conf, timeline_id, tenant_id, key_range, lsn)?),
+        })
+    }
+
+    pub fn put_image(&mut self, key: Key, img: &[u8]) -> Result<()> {
+        self.inner.as_mut().unwrap().put_image(key, img)
+    }
+
+    pub fn finish(mut self) -> Result<ImageLayer> {
+        self.inner.take().unwrap().finish()
+    }
+}
+
+impl Drop for ImageLayerWriter {
+    fn drop(&mut self) {
+        if let Some(inner) = self.inner.take() {
+            inner.blob_writer.into_inner().remove();
+        }
     }
 }
