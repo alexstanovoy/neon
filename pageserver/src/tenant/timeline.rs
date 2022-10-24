@@ -531,7 +531,7 @@ impl Timeline {
             Ok((partitioning, lsn)) => {
                 // 2. Create new image layers for partitions that have been modified
                 // "enough".
-                let layer_paths_to_upload = self.create_image_layers(&partitioning, lsn, true)?;
+                let layer_paths_to_upload = self.create_image_layers(&partitioning, lsn, false)?;
                 if !layer_paths_to_upload.is_empty()
                     && self.upload_layers.load(atomic::Ordering::Relaxed)
                 {
@@ -1541,11 +1541,9 @@ impl Timeline {
                     lsn,
                 )?;
 
-                fail::fail_point!("image-layer-fail-before-finish", |_| {
-                    anyhow::bail!("failpoint image-layer-fail-before-finish");
-                });
-
+                info!("blabla for");
                 for range in &partition.ranges {
+                    info!("blabla range");
                     let mut key = range.start;
                     while key < range.end {
                         let img = match self.get(key, lsn) {
@@ -1575,6 +1573,11 @@ impl Timeline {
                             }
                         };
                         image_layer_writer.put_image(key, &img)?;
+
+                        fail::fail_point!("image-layer-fail-before-finish", |_| {
+                            anyhow::bail!("failpoint image-layer-fail-before-finish");
+                        });
+
                         key = key.next();
                     }
                 }
